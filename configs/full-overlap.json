@@ -1,0 +1,5 @@
+[
+  {"id": "amber", "group": "Amber", "mark": "A", "target": [3, 3, 7, 7]},
+  {"id": "blue", "group": "Blue", "mark": "B", "target": [3, 3, 7, 7]},
+  {"id": "green", "group": "Green", "mark": "G", "target": [3, 3, 7, 7]}
+]

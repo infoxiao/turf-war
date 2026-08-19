@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local environment and editor files
+.DS_Store
+.env
+.env.*
+.idea/
+.vscode/
+
+# Generated experiment artifacts
+runs/
+
+# Historical local research and viewer artifacts (not part of the clean harness)
+archive/
+web/
+analyze_batch.py
+BATCH_RESULTS.md
+RESULTS.md
+RFC.md

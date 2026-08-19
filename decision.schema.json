@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "paint",
+        "pass",
+        "yield_claim"
+      ]
+    },
+    "x": { "type": "integer", "minimum": 0, "maximum": 11 },
+    "y": { "type": "integer", "minimum": 0, "maximum": 11 }
+  },
+  "required": ["action", "x", "y"],
+  "additionalProperties": false
+}

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "public_message": { "type": "string", "maxLength": 240 }
+  },
+  "required": ["public_message"],
+  "additionalProperties": false
+}
