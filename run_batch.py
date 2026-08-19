@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import re
 import sys
@@ -17,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent
 RUNS = ROOT / "runs"
+DEFAULT_IDENTITY_PROMPT = ROOT / "prompts" / "identity.md"
 LOGS = RUNS / "batch-logs"
 EXCLUDED = RUNS / "excluded"
 CONTROL_CHARACTER = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -30,6 +32,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-seed", type=int, default=1)
     parser.add_argument("--condition", choices=("blind", "disclosed"), default="blind")
     parser.add_argument("--target-layout", choices=("partial", "full"), default="full")
+    parser.add_argument(
+        "--identity-prompt",
+        type=Path,
+        default=DEFAULT_IDENTITY_PROMPT,
+        help="Identity/scoring prompt template forwarded to every replication.",
+    )
     parser.add_argument("--prefix")
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--model")
@@ -49,6 +57,7 @@ def validate_run(
     expected_run_id: str | None = None,
     expected_condition: str = "blind",
     expected_target_layout: str = "full",
+    expected_identity_prompt_sha256: str | None = None,
 ) -> Tuple[bool, List[str]]:
     problems: List[str] = []
     try:
@@ -67,6 +76,11 @@ def validate_run(
         problems.append(f"condition={metadata.get('condition')}")
     if metadata.get("target_layout") != expected_target_layout:
         problems.append(f"target_layout={metadata.get('target_layout')}")
+    if (
+        expected_identity_prompt_sha256 is not None
+        and metadata.get("identity_prompt_sha256") != expected_identity_prompt_sha256
+    ):
+        problems.append("identity prompt does not match the requested template")
     if expected_seed is not None and metadata.get("seed") != expected_seed:
         problems.append(f"seed={metadata.get('seed')}")
     if expected_run_id is not None and metadata.get("run_id") != expected_run_id:
@@ -156,6 +170,7 @@ async def run_one(
             run_id,
             args.condition,
             args.target_layout,
+            args.identity_prompt_sha256,
         )
         if run_dir.exists()
         else (False, [])
@@ -184,6 +199,8 @@ async def run_one(
         args.condition,
         "--target-layout",
         args.target_layout,
+        "--identity-prompt",
+        str(args.identity_prompt),
         "--rounds",
         str(args.rounds),
         "--timeout",
@@ -219,6 +236,7 @@ async def run_one(
         run_id,
         args.condition,
         args.target_layout,
+        args.identity_prompt_sha256,
     )
     return manifest_entry(
         run_id,
@@ -249,6 +267,12 @@ async def run_batch(args: argparse.Namespace) -> List[Dict[str, Any]]:
 
 def main() -> None:
     args = parse_args()
+    args.identity_prompt = args.identity_prompt.resolve()
+    try:
+        identity_prompt = args.identity_prompt.read_bytes()
+    except OSError as error:
+        raise SystemExit(f"Could not load identity prompt {args.identity_prompt}: {error}") from error
+    args.identity_prompt_sha256 = hashlib.sha256(identity_prompt.strip()).hexdigest()
     if args.prefix is None:
         args.prefix = f"canvas-{args.condition}-{args.target_layout}-rep"
     results = asyncio.run(run_batch(args))
@@ -262,6 +286,8 @@ def main() -> None:
             "prefix": args.prefix,
             "condition": args.condition,
             "target_layout": args.target_layout,
+            "identity_prompt_file": args.identity_prompt.name,
+            "identity_prompt_sha256": args.identity_prompt_sha256,
             "timeout_seconds": args.timeout,
             "model": args.model or "Codex default",
         },

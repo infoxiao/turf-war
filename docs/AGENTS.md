@@ -40,6 +40,16 @@ Repeat that shape for all three agents. The harness validates that:
 The full resolved configuration is copied into `metadata.json`, so the original
 configuration file is not required to reproduce or audit the prompt content.
 
+## Identity wording
+
+Agent data and agent framing are separate experiment controls:
+
+- `--agents-file` changes who the agents are and which territory they score;
+- `--identity-prompt` changes how that identity, goal, and context are described.
+
+The default wording lives in `prompts/identity.md`, rather than inside the
+runner. See [PROMPTS.md](PROMPTS.md) for template variables and examples.
+
 ## Runtime isolation
 
 Each message and action is a fresh `codex exec` call with:

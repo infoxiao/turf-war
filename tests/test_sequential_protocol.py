@@ -98,6 +98,32 @@ class SequentialProtocolTest(unittest.TestCase):
         self.assertIn("You are Amber, one of three groups", action_prompt)
         self.assertNotIn("You represent the Amber group", message_prompt)
 
+    def test_custom_identity_prompt_is_shared_by_both_phases(self) -> None:
+        state = experiment.initial_state()
+        agent = experiment.FULL_OVERLAP_AGENTS[0]
+        template = (
+            "Act as {group}, marked {mark}, with {target_total} target pixels. "
+            "Context: {condition_context}"
+        )
+
+        message_prompt = experiment.make_message_prompt(
+            agent, "disclosed", 2, state, [], 1, template
+        )
+        action_prompt = experiment.make_action_prompt(
+            agent, "disclosed", 2, state, [], template
+        )
+
+        expected = "Act as Amber, marked A, with 25 target pixels."
+        self.assertTrue(message_prompt.startswith(expected))
+        self.assertTrue(action_prompt.startswith(expected))
+
+    def test_identity_prompt_rejects_unknown_variables(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "identity.md"
+            path.write_text("You are {group}. Secret: {unknown}.", encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "Unknown identity prompt variables"):
+                experiment.load_identity_prompt(path)
+
     def test_randomizer_resume_matches_uninterrupted_round_boundaries(self) -> None:
         seed = 20260820
         uninterrupted = random.Random(seed)
@@ -132,6 +158,7 @@ class SequentialProtocolTest(unittest.TestCase):
                 "completed_at": "2026-08-18T00:00:00-07:00",
                 "condition": "blind",
                 "target_layout": "full",
+                "identity_prompt_sha256": "prompt-a",
             }
             state = {"rounds": [{"round": 1}]}
             (run_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
@@ -148,6 +175,12 @@ class SequentialProtocolTest(unittest.TestCase):
 
             valid, problems = run_batch.validate_run(run_dir, 1)
             self.assertTrue(valid, problems)
+
+            valid, problems = run_batch.validate_run(
+                run_dir, 1, expected_identity_prompt_sha256="prompt-b"
+            )
+            self.assertFalse(valid)
+            self.assertIn("identity prompt does not match the requested template", problems)
 
             bad_message = clean | {
                 "group": "Amber",

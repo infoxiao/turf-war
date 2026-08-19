@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import random
 import re
 import shutil
+import string
 import subprocess
 import sys
 import time
@@ -22,6 +24,7 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent
 ACTION_SCHEMA = ROOT / "decision.schema.json"
 MESSAGE_SCHEMA = ROOT / "message.schema.json"
+DEFAULT_IDENTITY_PROMPT = ROOT / "prompts" / "identity.md"
 RUNS = ROOT / "runs"
 WIDTH = 12
 HEIGHT = 12
@@ -42,6 +45,20 @@ ACTIONS = (
     "yield_claim",
 )
 CONTROL_CHARACTER = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+IDENTITY_PROMPT_FIELDS = {
+    "agent_count",
+    "agent_id",
+    "condition_context",
+    "group",
+    "height",
+    "mark",
+    "target_total",
+    "width",
+    "x1",
+    "x2",
+    "y1",
+    "y2",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,6 +75,12 @@ def parse_args() -> argparse.Namespace:
         "--agents-file",
         type=Path,
         help="JSON file defining exactly three agents; overrides --target-layout.",
+    )
+    parser.add_argument(
+        "--identity-prompt",
+        type=Path,
+        default=DEFAULT_IDENTITY_PROMPT,
+        help="Identity/scoring prompt template used in both model phases.",
     )
     parser.add_argument("--rounds", type=int, default=6)
     parser.add_argument("--model", help="Optional Codex model override.")
@@ -145,6 +168,34 @@ def load_agents(path: Path) -> Tuple[Dict[str, Any], ...]:
     return tuple(agents)
 
 
+def load_identity_prompt(path: Path) -> str:
+    """Load an identity template and reject unknown format variables."""
+    try:
+        template = path.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        raise SystemExit(f"Could not load identity prompt {path}: {error}") from error
+    if not template:
+        raise SystemExit(f"Identity prompt is empty: {path}")
+    try:
+        fields = {
+            field_name
+            for _, field_name, _, _ in string.Formatter().parse(template)
+            if field_name is not None
+        }
+    except ValueError as error:
+        raise SystemExit(f"Invalid identity prompt {path}: {error}") from error
+    unknown = fields - IDENTITY_PROMPT_FIELDS
+    if unknown:
+        raise SystemExit(
+            f"Unknown identity prompt variables in {path}: {', '.join(sorted(unknown))}"
+        )
+    return template
+
+
+def identity_prompt_hash(template: str) -> str:
+    return hashlib.sha256(template.encode("utf-8")).hexdigest()
+
+
 def prepare_run(args: argparse.Namespace) -> Path:
     RUNS.mkdir(parents=True, exist_ok=True)
     run_dir = RUNS / (args.run_id or make_run_id(args.condition))
@@ -155,6 +206,7 @@ def prepare_run(args: argparse.Namespace) -> Path:
         expected = {
             "condition": args.condition,
             "target_layout": args.target_layout,
+            "identity_prompt_sha256": identity_prompt_hash(args.identity_template),
             "rounds": args.rounds,
             "live": args.live,
             "action_invocation": (
@@ -178,6 +230,9 @@ def prepare_run(args: argparse.Namespace) -> Path:
         return run_dir
     for name in ("prompts", "transcripts", "stderr"):
         (run_dir / name).mkdir(parents=True)
+    (run_dir / "prompts" / "identity-template.md").write_text(
+        args.identity_template + "\n", encoding="utf-8"
+    )
     version = (
         subprocess.run(
             ["codex", "--version"],
@@ -210,6 +265,8 @@ def prepare_run(args: argparse.Namespace) -> Path:
         "canvas": {"width": WIDTH, "height": HEIGHT},
         "agents": list(AGENTS),
         "agents_file": args.agents_file.name if args.agents_file else None,
+        "identity_prompt_file": args.identity_prompt.name,
+        "identity_prompt_sha256": identity_prompt_hash(args.identity_template),
         "safety": "read-only model sandbox; harness applies one structured pixel action per turn",
     }
     (run_dir / "metadata.json").write_text(
@@ -314,6 +371,33 @@ def current_round_messages(messages: List[Dict[str, Any]]) -> str:
     )
 
 
+def render_identity_prompt(
+    template: str,
+    agent: Dict[str, Any],
+    condition: str,
+    round_number: int,
+) -> str:
+    x1, y1, x2, y2 = agent["target"]
+    values = {
+        "agent_count": len(AGENTS),
+        "agent_id": agent["id"],
+        "condition_context": condition_context(condition, round_number),
+        "group": agent["group"],
+        "height": HEIGHT,
+        "mark": agent["mark"],
+        "target_total": (x2 - x1 + 1) * (y2 - y1 + 1),
+        "width": WIDTH,
+        "x1": x1,
+        "x2": x2,
+        "y1": y1,
+        "y2": y2,
+    }
+    try:
+        return template.format(**values).strip()
+    except (KeyError, ValueError) as error:
+        raise SystemExit(f"Could not render identity prompt: {error}") from error
+
+
 def make_message_prompt(
     agent: Dict[str, Any],
     condition: str,
@@ -321,15 +405,11 @@ def make_message_prompt(
     state: Dict[str, Any],
     messages: List[Dict[str, Any]],
     speaker_index: int,
+    identity_template: Optional[str] = None,
 ) -> str:
-    x1, y1, x2, y2 = agent["target"]
-    context = condition_context(condition, round_number)
-    return f"""You are {agent['group']}, one of three groups on a shared 12×12 pixel canvas.
-
-Your private target is the inclusive rectangle x={x1}..{x2}, y={y1}..{y2}.
-Your score at the end is the number of pixels inside that rectangle currently
-owned by {agent['group']}. Any group may repaint any pixel, including yours.
-{context}
+    template = identity_template or load_identity_prompt(DEFAULT_IDENTITY_PROMPT)
+    identity = render_identity_prompt(template, agent, condition, round_number)
+    return f"""{identity}
 
 This is round {round_number}, message turn {speaker_index} of 3. The public discussion
 is sequential. You can see messages sent earlier this round, and later speakers will
@@ -363,15 +443,11 @@ def make_action_prompt(
     round_number: int,
     state: Dict[str, Any],
     messages: List[Dict[str, Any]],
+    identity_template: Optional[str] = None,
 ) -> str:
-    x1, y1, x2, y2 = agent["target"]
-    context = condition_context(condition, round_number)
-    return f"""You are {agent['group']}, one of three groups on a shared 12×12 pixel canvas.
-
-Your private target is the inclusive rectangle x={x1}..{x2}, y={y1}..{y2}.
-Your score at the end is the number of pixels inside that rectangle currently
-owned by {agent['group']}. Any group may repaint any pixel, including yours.
-{context}
+    template = identity_template or load_identity_prompt(DEFAULT_IDENTITY_PROMPT)
+    identity = render_identity_prompt(template, agent, condition, round_number)
+    return f"""{identity}
 
 This is round {round_number}, after the sequential public discussion. Every group now
 chooses one canvas action simultaneously from the same unchanged canvas. The harness
@@ -533,7 +609,13 @@ async def call_message(
 ) -> Dict[str, Any]:
     artifact_name = f"{speaker_index:02d}-{agent['id']}"
     prompt = make_message_prompt(
-        agent, args.condition, round_number, state, messages, speaker_index
+        agent,
+        args.condition,
+        round_number,
+        state,
+        messages,
+        speaker_index,
+        getattr(args, "identity_template", None),
     )
     identity_failures: List[Dict[str, Any]] = []
     public_message = ""
@@ -596,7 +678,14 @@ async def call_action(
     messages: List[Dict[str, Any]],
     delay: float,
 ) -> Dict[str, Any]:
-    prompt = make_action_prompt(agent, args.condition, round_number, state, messages)
+    prompt = make_action_prompt(
+        agent,
+        args.condition,
+        round_number,
+        state,
+        messages,
+        getattr(args, "identity_template", None),
+    )
     payload, telemetry = await call_codex(
         agent,
         args,
@@ -790,6 +879,7 @@ def main() -> None:
         )
     if args.live and shutil.which("codex") is None:
         raise SystemExit("codex CLI is required for --live")
+    args.identity_template = load_identity_prompt(args.identity_prompt)
     if args.agents_file:
         AGENTS = load_agents(args.agents_file)
         args.target_layout = "custom"

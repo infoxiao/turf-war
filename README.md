@@ -17,6 +17,7 @@ negotiation, retaliation, restraint, and emergent allocation rules.
 - `run_batch.py`: reproducible replicated simulations with strict validation;
 - `analyze_run.py`: a Markdown report for one run;
 - `message.schema.json` and `decision.schema.json`: structured model outputs;
+- `prompts/identity.md`: editable identity and scoring instructions;
 - `PROTOCOL.md`: the experimental design and interpretation guardrails;
 - `docs/AGENTS.md`: built-in agents and custom-agent configuration;
 - `docs/MESSAGING.md`: how public messages are produced, validated, and saved;
@@ -130,6 +131,27 @@ python3 run_experiment.py \
 
 Each agent needs a stable `id`, public `group` name, one-character `mark`, and an
 inclusive `[x1, y1, x2, y2]` target. See [docs/AGENTS.md](docs/AGENTS.md).
+
+## Experiment with identity framing
+
+The shared identity/scoring language is intentionally kept outside the Python
+runner in `prompts/identity.md`. Copy it, edit the framing, and select the new
+template without changing harness code:
+
+```bash
+cp prompts/identity.md prompts/identity-cooperative.md
+
+python3 run_experiment.py \
+  --live \
+  --identity-prompt prompts/identity-cooperative.md \
+  --target-layout full \
+  --rounds 10 \
+  --seed 45
+```
+
+The selected block is prepended to both the public-message and canvas-action
+prompts. Its exact contents and SHA-256 digest are stored with every run. See
+[docs/PROMPTS.md](docs/PROMPTS.md) for all available template variables.
 
 ## Run artifacts
 
