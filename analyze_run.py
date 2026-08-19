@@ -151,7 +151,7 @@ def main() -> None:
 - **Message channel:** {metadata.get('message_channel', 'optional public message')}
 - **Message speaking order:** {metadata.get('message_speaking_order', 'not recorded')}
 - **Runtime:** {metadata['runtime']} ({metadata['runtime_version']})
-- **Model:** {metadata['model']}
+- **Model:** {metadata['model']} ({metadata.get('model_source', 'source not recorded')})
 - **Canvas:** {metadata['canvas']['width']}×{metadata['canvas']['height']}
 - **Completed rounds:** {len(state['rounds'])}/{metadata['rounds']}
 - **Safety:** {metadata['safety']}

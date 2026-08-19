@@ -54,6 +54,7 @@ runner. See [PROMPTS.md](PROMPTS.md) for template variables and examples.
 
 Each message and action is a fresh `codex exec` call with:
 
+- the exact model ID required by `--model`;
 - an ephemeral session;
 - a read-only sandbox;
 - user configuration and repository rules ignored;

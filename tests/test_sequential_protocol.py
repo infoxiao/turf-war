@@ -189,6 +189,27 @@ class SequentialProtocolTest(unittest.TestCase):
         experiment.advance_randomizer(resumed, 7)
         self.assertEqual(uninterrupted.getstate(), resumed.getstate())
 
+    def test_live_runs_require_an_explicit_model(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "Live runs require --model MODEL_ID"):
+            experiment.recorded_model(argparse.Namespace(live=True, model=None))
+
+        self.assertEqual(
+            experiment.recorded_model(
+                argparse.Namespace(live=True, model="gpt-5.6-sol")
+            ),
+            "gpt-5.6-sol",
+        )
+        self.assertEqual(
+            experiment.recorded_model(argparse.Namespace(live=False, model=None)),
+            "not invoked (dry run)",
+        )
+        self.assertEqual(
+            experiment.model_source(
+                argparse.Namespace(live=False, model="gpt-5.6-sol")
+            ),
+            "planned --model (dry run)",
+        )
+
     def test_custom_agents_are_loaded_and_validated(self) -> None:
         agents = [
             {"id": "one", "group": "One", "mark": "1", "target": [0, 0, 1, 1]},
@@ -212,6 +233,7 @@ class SequentialProtocolTest(unittest.TestCase):
                 "message_prompt_sha256": "prompt-message",
                 "action_prompt_sha256": "prompt-action",
                 "condition_prompts_sha256": "prompt-conditions",
+                "model": "gpt-5.6-sol",
             }
             state = {"rounds": [{"round": 1}]}
             (run_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
@@ -246,6 +268,12 @@ class SequentialProtocolTest(unittest.TestCase):
             )
             self.assertFalse(valid)
             self.assertIn("condition prompts do not match the requested templates", problems)
+
+            valid, problems = run_batch.validate_run(
+                run_dir, 1, expected_model="gpt-5.6-terra"
+            )
+            self.assertFalse(valid)
+            self.assertIn("model=gpt-5.6-sol", problems)
 
             bad_message = clean | {
                 "group": "Amber",

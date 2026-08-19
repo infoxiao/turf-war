@@ -56,6 +56,7 @@ Run a live six-round simulation with partially overlapping targets:
 ```bash
 python3 run_experiment.py \
   --live \
+  --model gpt-5.6-sol \
   --condition blind \
   --target-layout partial \
   --rounds 6 \
@@ -68,6 +69,7 @@ Run the full-overlap condition, where all three agents score the same 5×5 area:
 ```bash
 python3 run_experiment.py \
   --live \
+  --model gpt-5.6-sol \
   --condition disclosed \
   --target-layout full \
   --rounds 10 \
@@ -75,9 +77,11 @@ python3 run_experiment.py \
   --run-id full-disclosed-43
 ```
 
-Pass `--model MODEL` to pin a model instead of using the local Codex default.
-Use `--resume` with the same configuration to continue an interrupted run from
-its last committed round.
+Live runs require `--model MODEL_ID`; the harness passes that exact value to
+every Codex call and records it in `metadata.json`. This prevents an unrecorded
+CLI default from weakening model attribution. Replace `gpt-5.6-sol` in these
+examples with the model being studied. Use `--resume` with the same model and
+configuration to continue an interrupted run from its last committed round.
 
 ## Run replications
 
@@ -86,6 +90,7 @@ malformed results:
 
 ```bash
 python3 run_batch.py \
+  --model gpt-5.6-sol \
   --count 5 \
   --rounds 10 \
   --condition disclosed \
@@ -124,6 +129,7 @@ also supply exactly three agents in a JSON file:
 ```bash
 python3 run_experiment.py \
   --live \
+  --model gpt-5.6-sol \
   --agents-file configs/full-overlap.json \
   --rounds 10 \
   --seed 44
@@ -155,6 +161,7 @@ cp -R prompts/conditions prompts/conditions-custom
 
 python3 run_experiment.py \
   --live \
+  --model gpt-5.6-sol \
   --identity-prompt prompts/identity-cooperative.md \
   --message-prompt prompts/message-terse.md \
   --action-prompt prompts/action-custom.md \

@@ -66,7 +66,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--prefix")
     parser.add_argument("--timeout", type=int, default=120)
-    parser.add_argument("--model")
+    parser.add_argument(
+        "--model",
+        required=True,
+        help="Exact Codex model ID recorded and used for every replication.",
+    )
     return parser.parse_args()
 
 
@@ -107,6 +111,7 @@ def validate_run(
     expected_message_prompt_sha256: str | None = None,
     expected_action_prompt_sha256: str | None = None,
     expected_condition_prompts_sha256: str | None = None,
+    expected_model: str | None = None,
 ) -> Tuple[bool, List[str]]:
     problems: List[str] = []
     try:
@@ -125,6 +130,8 @@ def validate_run(
         problems.append(f"condition={metadata.get('condition')}")
     if metadata.get("target_layout") != expected_target_layout:
         problems.append(f"target_layout={metadata.get('target_layout')}")
+    if expected_model is not None and metadata.get("model") != expected_model:
+        problems.append(f"model={metadata.get('model')}")
     if (
         expected_identity_prompt_sha256 is not None
         and metadata.get("identity_prompt_sha256") != expected_identity_prompt_sha256
@@ -239,6 +246,7 @@ async def run_one(
             args.message_prompt_sha256,
             args.action_prompt_sha256,
             args.condition_prompts_sha256,
+            args.model,
         )
         if run_dir.exists()
         else (False, [])
@@ -288,8 +296,7 @@ async def run_one(
     ]
     if run_dir.exists():
         command.append("--resume")
-    if args.model:
-        command.extend(["--model", args.model])
+    command.extend(["--model", args.model])
 
     LOGS.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
@@ -314,6 +321,7 @@ async def run_one(
         args.message_prompt_sha256,
         args.action_prompt_sha256,
         args.condition_prompts_sha256,
+        args.model,
     )
     return manifest_entry(
         run_id,
@@ -376,7 +384,8 @@ def main() -> None:
             "condition_prompts_dir": args.condition_prompts_dir.name,
             "condition_prompts_sha256": args.condition_prompts_sha256,
             "timeout_seconds": args.timeout,
-            "model": args.model or "Codex default",
+            "model": args.model,
+            "model_source": "explicit --model",
         },
         "runs": results,
     }

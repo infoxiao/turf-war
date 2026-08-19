@@ -26,6 +26,7 @@ cp -R prompts/conditions prompts/conditions-custom
 
 python3 run_experiment.py \
   --live \
+  --model gpt-5.6-sol \
   --identity-prompt prompts/identity-cooperative.md \
   --message-prompt prompts/message-terse.md \
   --action-prompt prompts/action-custom.md \
@@ -39,6 +40,7 @@ The same options work with replications:
 
 ```bash
 python3 run_batch.py \
+  --model gpt-5.6-sol \
   --identity-prompt prompts/identity-cooperative.md \
   --message-prompt prompts/message-terse.md \
   --action-prompt prompts/action-custom.md \

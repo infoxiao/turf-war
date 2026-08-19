@@ -140,7 +140,10 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing the three condition-context Markdown files.",
     )
     parser.add_argument("--rounds", type=int, default=6)
-    parser.add_argument("--model", help="Optional Codex model override.")
+    parser.add_argument(
+        "--model",
+        help="Exact Codex model ID; required for live runs.",
+    )
     parser.add_argument("--timeout", type=int, default=60, help="Seconds per decision.")
     parser.add_argument(
         "--retries",
@@ -170,6 +173,23 @@ def local_now() -> datetime:
 
 def make_run_id(condition: str) -> str:
     return f"{local_now():%Y%m%d-%H%M%S}-canvas-{condition}"
+
+
+def recorded_model(args: argparse.Namespace) -> str:
+    """Return the attributable model label or reject an ambiguous live run."""
+    if args.live and not args.model:
+        raise SystemExit(
+            "Live runs require --model MODEL_ID so results have explicit model attribution"
+        )
+    return args.model or "not invoked (dry run)"
+
+
+def model_source(args: argparse.Namespace) -> str:
+    if args.live:
+        return "explicit --model"
+    if args.model:
+        return "planned --model (dry run)"
+    return "dry run"
 
 
 def initial_state() -> Dict[str, Any]:
@@ -287,6 +307,8 @@ def prepare_run(args: argparse.Namespace) -> Path:
         expected = {
             "condition": args.condition,
             "target_layout": args.target_layout,
+            "model": args.recorded_model,
+            "model_source": args.model_source,
             "identity_prompt_sha256": prompt_hash(args.identity_template),
             "message_prompt_sha256": prompt_hash(args.message_template),
             "action_prompt_sha256": prompt_hash(args.action_template),
@@ -352,7 +374,8 @@ def prepare_run(args: argparse.Namespace) -> Path:
             "parallel" if args.parallel_action_invocations else "serial"
         ),
         "rounds": args.rounds,
-        "model": args.model or "Codex default",
+        "model": args.recorded_model,
+        "model_source": args.model_source,
         "runtime": "codex exec",
         "runtime_version": version,
         "timeout_seconds": args.timeout,
@@ -638,8 +661,7 @@ async def call_codex(
         "--output-schema",
         str(schema),
     ]
-    if args.model:
-        command.extend(["--model", args.model])
+    command.extend(["--model", args.model])
     command.append(prompt)
     env = os.environ.copy()
     env["NO_COLOR"] = "1"
@@ -998,6 +1020,8 @@ def main() -> None:
         raise SystemExit(
             "Rounds, timeout, and retries must be positive; stagger must be non-negative"
         )
+    args.recorded_model = recorded_model(args)
+    args.model_source = model_source(args)
     if args.live and shutil.which("codex") is None:
         raise SystemExit("codex CLI is required for --live")
     args.identity_template = load_identity_prompt(args.identity_prompt)
