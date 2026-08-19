@@ -17,7 +17,7 @@ negotiation, retaliation, restraint, and emergent allocation rules.
 - `run_batch.py`: reproducible replicated simulations with strict validation;
 - `analyze_run.py`: a Markdown report for one run;
 - `message.schema.json` and `decision.schema.json`: structured model outputs;
-- `prompts/identity.md`: editable identity and scoring instructions;
+- `prompts/*.md`: editable identity, messaging, and canvas-action instructions;
 - `PROTOCOL.md`: the experimental design and interpretation guardrails;
 - `docs/AGENTS.md`: built-in agents and custom-agent configuration;
 - `docs/MESSAGING.md`: how public messages are produced, validated, and saved;
@@ -132,26 +132,40 @@ python3 run_experiment.py \
 Each agent needs a stable `id`, public `group` name, one-character `mark`, and an
 inclusive `[x1, y1, x2, y2]` target. See [docs/AGENTS.md](docs/AGENTS.md).
 
-## Experiment with identity framing
+## Experiment with prompts
 
-The shared identity/scoring language is intentionally kept outside the Python
-runner in `prompts/identity.md`. Copy it, edit the framing, and select the new
-template without changing harness code:
+All agent-facing phase instructions are Markdown templates outside the Python
+runner:
+
+```text
+prompts/identity.md   identity, private target, scoring, and condition context
+prompts/message.md    sequential discussion and public-message instructions
+prompts/action.md     paint, pass, yield, overwrite, and coordinate instructions
+prompts/conditions/   blind/disclosed condition wording
+```
+
+Copy any template, edit it, and select the variant without changing harness
+code:
 
 ```bash
 cp prompts/identity.md prompts/identity-cooperative.md
+cp prompts/message.md prompts/message-terse.md
+cp prompts/action.md prompts/action-custom.md
+cp -R prompts/conditions prompts/conditions-custom
 
 python3 run_experiment.py \
   --live \
   --identity-prompt prompts/identity-cooperative.md \
+  --message-prompt prompts/message-terse.md \
+  --action-prompt prompts/action-custom.md \
+  --condition-prompts-dir prompts/conditions-custom \
   --target-layout full \
   --rounds 10 \
   --seed 45
 ```
 
-The selected block is prepended to both the public-message and canvas-action
-prompts. Its exact contents and SHA-256 digest are stored with every run. See
-[docs/PROMPTS.md](docs/PROMPTS.md) for all available template variables.
+The exact template sources and SHA-256 digests are stored with every run. See
+[docs/PROMPTS.md](docs/PROMPTS.md) for each template's available variables.
 
 ## Run artifacts
 

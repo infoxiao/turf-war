@@ -101,21 +101,47 @@ class SequentialProtocolTest(unittest.TestCase):
     def test_custom_identity_prompt_is_shared_by_both_phases(self) -> None:
         state = experiment.initial_state()
         agent = experiment.FULL_OVERLAP_AGENTS[0]
-        template = (
+        identity_template = (
             "Act as {group}, marked {mark}, with {target_total} target pixels. "
             "Context: {condition_context}"
         )
+        message_template = "MESSAGE PHASE\n{identity}\nTurn {speaker_index}\n{canvas}"
+        action_template = "ACTION PHASE\n{identity}\nLimit {x_max}\n{canvas_legend}"
+        condition_templates = {
+            "blind_initial": "Unexpected peers.",
+            "blind_observed": "Peers observed.",
+            "disclosed": "Custom disclosed context.",
+        }
 
         message_prompt = experiment.make_message_prompt(
-            agent, "disclosed", 2, state, [], 1, template
+            agent,
+            "disclosed",
+            2,
+            state,
+            [],
+            1,
+            identity_template,
+            message_template,
+            condition_templates,
         )
         action_prompt = experiment.make_action_prompt(
-            agent, "disclosed", 2, state, [], template
+            agent,
+            "disclosed",
+            2,
+            state,
+            [],
+            identity_template,
+            action_template,
+            condition_templates,
         )
 
         expected = "Act as Amber, marked A, with 25 target pixels."
-        self.assertTrue(message_prompt.startswith(expected))
-        self.assertTrue(action_prompt.startswith(expected))
+        self.assertTrue(message_prompt.startswith("MESSAGE PHASE\n" + expected))
+        self.assertTrue(action_prompt.startswith("ACTION PHASE\n" + expected))
+        self.assertIn("Turn 1", message_prompt)
+        self.assertIn("Limit 11", action_prompt)
+        self.assertIn("Custom disclosed context.", message_prompt)
+        self.assertIn("Custom disclosed context.", action_prompt)
 
     def test_identity_prompt_rejects_unknown_variables(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -123,6 +149,30 @@ class SequentialProtocolTest(unittest.TestCase):
             path.write_text("You are {group}. Secret: {unknown}.", encoding="utf-8")
             with self.assertRaisesRegex(SystemExit, "Unknown identity prompt variables"):
                 experiment.load_identity_prompt(path)
+
+            path.write_text("Send this: {unknown}.", encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "Unknown message prompt variables"):
+                experiment.load_message_prompt(path)
+
+    def test_phase_instructions_live_outside_python(self) -> None:
+        source = Path(experiment.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("Speak on your own behalf", source)
+        self.assertNotIn("Choose exactly one canvas action", source)
+        self.assertNotIn("No other painters were expected.", source)
+        self.assertIn(
+            "Speak on your own behalf",
+            experiment.DEFAULT_MESSAGE_PROMPT.read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "Choose exactly one canvas action",
+            experiment.DEFAULT_ACTION_PROMPT.read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "No other painters were expected.",
+            (experiment.DEFAULT_CONDITION_PROMPTS / "blind-initial.md").read_text(
+                encoding="utf-8"
+            ),
+        )
 
     def test_randomizer_resume_matches_uninterrupted_round_boundaries(self) -> None:
         seed = 20260820
@@ -159,6 +209,9 @@ class SequentialProtocolTest(unittest.TestCase):
                 "condition": "blind",
                 "target_layout": "full",
                 "identity_prompt_sha256": "prompt-a",
+                "message_prompt_sha256": "prompt-message",
+                "action_prompt_sha256": "prompt-action",
+                "condition_prompts_sha256": "prompt-conditions",
             }
             state = {"rounds": [{"round": 1}]}
             (run_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
@@ -181,6 +234,18 @@ class SequentialProtocolTest(unittest.TestCase):
             )
             self.assertFalse(valid)
             self.assertIn("identity prompt does not match the requested template", problems)
+
+            valid, problems = run_batch.validate_run(
+                run_dir, 1, expected_action_prompt_sha256="different-action"
+            )
+            self.assertFalse(valid)
+            self.assertIn("action prompt does not match the requested template", problems)
+
+            valid, problems = run_batch.validate_run(
+                run_dir, 1, expected_condition_prompts_sha256="different-conditions"
+            )
+            self.assertFalse(valid)
+            self.assertIn("condition prompts do not match the requested templates", problems)
 
             bad_message = clean | {
                 "group": "Amber",

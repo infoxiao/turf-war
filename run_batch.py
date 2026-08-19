@@ -19,6 +19,14 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent
 RUNS = ROOT / "runs"
 DEFAULT_IDENTITY_PROMPT = ROOT / "prompts" / "identity.md"
+DEFAULT_MESSAGE_PROMPT = ROOT / "prompts" / "message.md"
+DEFAULT_ACTION_PROMPT = ROOT / "prompts" / "action.md"
+DEFAULT_CONDITION_PROMPTS = ROOT / "prompts" / "conditions"
+CONDITION_PROMPT_FILES = {
+    "blind_initial": "blind-initial.md",
+    "blind_observed": "blind-observed.md",
+    "disclosed": "disclosed.md",
+}
 LOGS = RUNS / "batch-logs"
 EXCLUDED = RUNS / "excluded"
 CONTROL_CHARACTER = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -38,6 +46,24 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_IDENTITY_PROMPT,
         help="Identity/scoring prompt template forwarded to every replication.",
     )
+    parser.add_argument(
+        "--message-prompt",
+        type=Path,
+        default=DEFAULT_MESSAGE_PROMPT,
+        help="Public-message prompt template forwarded to every replication.",
+    )
+    parser.add_argument(
+        "--action-prompt",
+        type=Path,
+        default=DEFAULT_ACTION_PROMPT,
+        help="Canvas-action prompt template forwarded to every replication.",
+    )
+    parser.add_argument(
+        "--condition-prompts-dir",
+        type=Path,
+        default=DEFAULT_CONDITION_PROMPTS,
+        help="Condition-context prompt directory forwarded to every replication.",
+    )
     parser.add_argument("--prefix")
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--model")
@@ -50,6 +76,26 @@ def load_jsonl(path: Path) -> List[Dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
+def prompt_file_hash(path: Path, label: str) -> str:
+    try:
+        content = path.read_bytes().strip()
+    except OSError as error:
+        raise SystemExit(f"Could not load {label} prompt {path}: {error}") from error
+    return hashlib.sha256(content).hexdigest()
+
+
+def condition_prompt_files_hash(directory: Path) -> str:
+    templates: Dict[str, str] = {}
+    for key, filename in CONDITION_PROMPT_FILES.items():
+        path = directory / filename
+        try:
+            templates[key] = path.read_text(encoding="utf-8").strip()
+        except OSError as error:
+            raise SystemExit(f"Could not load condition prompt {path}: {error}") from error
+    canonical = json.dumps(templates, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def validate_run(
     run_dir: Path,
     expected_rounds: int,
@@ -58,6 +104,9 @@ def validate_run(
     expected_condition: str = "blind",
     expected_target_layout: str = "full",
     expected_identity_prompt_sha256: str | None = None,
+    expected_message_prompt_sha256: str | None = None,
+    expected_action_prompt_sha256: str | None = None,
+    expected_condition_prompts_sha256: str | None = None,
 ) -> Tuple[bool, List[str]]:
     problems: List[str] = []
     try:
@@ -81,6 +130,22 @@ def validate_run(
         and metadata.get("identity_prompt_sha256") != expected_identity_prompt_sha256
     ):
         problems.append("identity prompt does not match the requested template")
+    if (
+        expected_message_prompt_sha256 is not None
+        and metadata.get("message_prompt_sha256") != expected_message_prompt_sha256
+    ):
+        problems.append("message prompt does not match the requested template")
+    if (
+        expected_action_prompt_sha256 is not None
+        and metadata.get("action_prompt_sha256") != expected_action_prompt_sha256
+    ):
+        problems.append("action prompt does not match the requested template")
+    if (
+        expected_condition_prompts_sha256 is not None
+        and metadata.get("condition_prompts_sha256")
+        != expected_condition_prompts_sha256
+    ):
+        problems.append("condition prompts do not match the requested templates")
     if expected_seed is not None and metadata.get("seed") != expected_seed:
         problems.append(f"seed={metadata.get('seed')}")
     if expected_run_id is not None and metadata.get("run_id") != expected_run_id:
@@ -171,6 +236,9 @@ async def run_one(
             args.condition,
             args.target_layout,
             args.identity_prompt_sha256,
+            args.message_prompt_sha256,
+            args.action_prompt_sha256,
+            args.condition_prompts_sha256,
         )
         if run_dir.exists()
         else (False, [])
@@ -201,6 +269,12 @@ async def run_one(
         args.target_layout,
         "--identity-prompt",
         str(args.identity_prompt),
+        "--message-prompt",
+        str(args.message_prompt),
+        "--action-prompt",
+        str(args.action_prompt),
+        "--condition-prompts-dir",
+        str(args.condition_prompts_dir),
         "--rounds",
         str(args.rounds),
         "--timeout",
@@ -237,6 +311,9 @@ async def run_one(
         args.condition,
         args.target_layout,
         args.identity_prompt_sha256,
+        args.message_prompt_sha256,
+        args.action_prompt_sha256,
+        args.condition_prompts_sha256,
     )
     return manifest_entry(
         run_id,
@@ -268,11 +345,15 @@ async def run_batch(args: argparse.Namespace) -> List[Dict[str, Any]]:
 def main() -> None:
     args = parse_args()
     args.identity_prompt = args.identity_prompt.resolve()
-    try:
-        identity_prompt = args.identity_prompt.read_bytes()
-    except OSError as error:
-        raise SystemExit(f"Could not load identity prompt {args.identity_prompt}: {error}") from error
-    args.identity_prompt_sha256 = hashlib.sha256(identity_prompt.strip()).hexdigest()
+    args.message_prompt = args.message_prompt.resolve()
+    args.action_prompt = args.action_prompt.resolve()
+    args.condition_prompts_dir = args.condition_prompts_dir.resolve()
+    args.identity_prompt_sha256 = prompt_file_hash(args.identity_prompt, "identity")
+    args.message_prompt_sha256 = prompt_file_hash(args.message_prompt, "message")
+    args.action_prompt_sha256 = prompt_file_hash(args.action_prompt, "action")
+    args.condition_prompts_sha256 = condition_prompt_files_hash(
+        args.condition_prompts_dir
+    )
     if args.prefix is None:
         args.prefix = f"canvas-{args.condition}-{args.target_layout}-rep"
     results = asyncio.run(run_batch(args))
@@ -288,6 +369,12 @@ def main() -> None:
             "target_layout": args.target_layout,
             "identity_prompt_file": args.identity_prompt.name,
             "identity_prompt_sha256": args.identity_prompt_sha256,
+            "message_prompt_file": args.message_prompt.name,
+            "message_prompt_sha256": args.message_prompt_sha256,
+            "action_prompt_file": args.action_prompt.name,
+            "action_prompt_sha256": args.action_prompt_sha256,
+            "condition_prompts_dir": args.condition_prompts_dir.name,
+            "condition_prompts_sha256": args.condition_prompts_sha256,
             "timeout_seconds": args.timeout,
             "model": args.model or "Codex default",
         },

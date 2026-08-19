@@ -25,6 +25,9 @@ ROOT = Path(__file__).resolve().parent
 ACTION_SCHEMA = ROOT / "decision.schema.json"
 MESSAGE_SCHEMA = ROOT / "message.schema.json"
 DEFAULT_IDENTITY_PROMPT = ROOT / "prompts" / "identity.md"
+DEFAULT_MESSAGE_PROMPT = ROOT / "prompts" / "message.md"
+DEFAULT_ACTION_PROMPT = ROOT / "prompts" / "action.md"
+DEFAULT_CONDITION_PROMPTS = ROOT / "prompts" / "conditions"
 RUNS = ROOT / "runs"
 WIDTH = 12
 HEIGHT = 12
@@ -59,6 +62,42 @@ IDENTITY_PROMPT_FIELDS = {
     "y1",
     "y2",
 }
+MESSAGE_PROMPT_FIELDS = {
+    "agent_count",
+    "agent_id",
+    "canvas",
+    "canvas_legend",
+    "current_round_messages",
+    "group",
+    "identity",
+    "mark",
+    "public_history",
+    "round_number",
+    "speaker_index",
+    "width",
+    "height",
+}
+ACTION_PROMPT_FIELDS = {
+    "agent_count",
+    "agent_id",
+    "canvas",
+    "canvas_legend",
+    "current_round_messages",
+    "group",
+    "identity",
+    "mark",
+    "public_history",
+    "round_number",
+    "width",
+    "height",
+    "x_max",
+    "y_max",
+}
+CONDITION_PROMPT_FILES = {
+    "blind_initial": "blind-initial.md",
+    "blind_observed": "blind-observed.md",
+    "disclosed": "disclosed.md",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,6 +120,24 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_IDENTITY_PROMPT,
         help="Identity/scoring prompt template used in both model phases.",
+    )
+    parser.add_argument(
+        "--message-prompt",
+        type=Path,
+        default=DEFAULT_MESSAGE_PROMPT,
+        help="Template for the sequential public-message phase.",
+    )
+    parser.add_argument(
+        "--action-prompt",
+        type=Path,
+        default=DEFAULT_ACTION_PROMPT,
+        help="Template for the simultaneous-information action phase.",
+    )
+    parser.add_argument(
+        "--condition-prompts-dir",
+        type=Path,
+        default=DEFAULT_CONDITION_PROMPTS,
+        help="Directory containing the three condition-context Markdown files.",
     )
     parser.add_argument("--rounds", type=int, default=6)
     parser.add_argument("--model", help="Optional Codex model override.")
@@ -168,14 +225,14 @@ def load_agents(path: Path) -> Tuple[Dict[str, Any], ...]:
     return tuple(agents)
 
 
-def load_identity_prompt(path: Path) -> str:
-    """Load an identity template and reject unknown format variables."""
+def load_prompt_template(path: Path, allowed_fields: set[str], label: str) -> str:
+    """Load a prompt template and reject unknown format variables."""
     try:
         template = path.read_text(encoding="utf-8").strip()
     except OSError as error:
-        raise SystemExit(f"Could not load identity prompt {path}: {error}") from error
+        raise SystemExit(f"Could not load {label} prompt {path}: {error}") from error
     if not template:
-        raise SystemExit(f"Identity prompt is empty: {path}")
+        raise SystemExit(f"{label.title()} prompt is empty: {path}")
     try:
         fields = {
             field_name
@@ -183,17 +240,41 @@ def load_identity_prompt(path: Path) -> str:
             if field_name is not None
         }
     except ValueError as error:
-        raise SystemExit(f"Invalid identity prompt {path}: {error}") from error
-    unknown = fields - IDENTITY_PROMPT_FIELDS
+        raise SystemExit(f"Invalid {label} prompt {path}: {error}") from error
+    unknown = fields - allowed_fields
     if unknown:
         raise SystemExit(
-            f"Unknown identity prompt variables in {path}: {', '.join(sorted(unknown))}"
+            f"Unknown {label} prompt variables in {path}: {', '.join(sorted(unknown))}"
         )
     return template
 
 
-def identity_prompt_hash(template: str) -> str:
+def load_identity_prompt(path: Path) -> str:
+    return load_prompt_template(path, IDENTITY_PROMPT_FIELDS, "identity")
+
+
+def load_message_prompt(path: Path) -> str:
+    return load_prompt_template(path, MESSAGE_PROMPT_FIELDS, "message")
+
+
+def load_action_prompt(path: Path) -> str:
+    return load_prompt_template(path, ACTION_PROMPT_FIELDS, "action")
+
+
+def load_condition_prompts(directory: Path) -> Dict[str, str]:
+    return {
+        key: load_prompt_template(directory / filename, set(), f"condition {key}")
+        for key, filename in CONDITION_PROMPT_FILES.items()
+    }
+
+
+def prompt_hash(template: str) -> str:
     return hashlib.sha256(template.encode("utf-8")).hexdigest()
+
+
+def condition_prompts_hash(templates: Dict[str, str]) -> str:
+    canonical = json.dumps(templates, sort_keys=True, separators=(",", ":"))
+    return prompt_hash(canonical)
 
 
 def prepare_run(args: argparse.Namespace) -> Path:
@@ -206,7 +287,12 @@ def prepare_run(args: argparse.Namespace) -> Path:
         expected = {
             "condition": args.condition,
             "target_layout": args.target_layout,
-            "identity_prompt_sha256": identity_prompt_hash(args.identity_template),
+            "identity_prompt_sha256": prompt_hash(args.identity_template),
+            "message_prompt_sha256": prompt_hash(args.message_template),
+            "action_prompt_sha256": prompt_hash(args.action_template),
+            "condition_prompts_sha256": condition_prompts_hash(
+                args.condition_templates
+            ),
             "rounds": args.rounds,
             "live": args.live,
             "action_invocation": (
@@ -233,6 +319,18 @@ def prepare_run(args: argparse.Namespace) -> Path:
     (run_dir / "prompts" / "identity-template.md").write_text(
         args.identity_template + "\n", encoding="utf-8"
     )
+    (run_dir / "prompts" / "message-template.md").write_text(
+        args.message_template + "\n", encoding="utf-8"
+    )
+    (run_dir / "prompts" / "action-template.md").write_text(
+        args.action_template + "\n", encoding="utf-8"
+    )
+    condition_dir = run_dir / "prompts" / "conditions"
+    condition_dir.mkdir()
+    for key, filename in CONDITION_PROMPT_FILES.items():
+        (condition_dir / filename).write_text(
+            args.condition_templates[key] + "\n", encoding="utf-8"
+        )
     version = (
         subprocess.run(
             ["codex", "--version"],
@@ -266,7 +364,15 @@ def prepare_run(args: argparse.Namespace) -> Path:
         "agents": list(AGENTS),
         "agents_file": args.agents_file.name if args.agents_file else None,
         "identity_prompt_file": args.identity_prompt.name,
-        "identity_prompt_sha256": identity_prompt_hash(args.identity_template),
+        "identity_prompt_sha256": prompt_hash(args.identity_template),
+        "message_prompt_file": args.message_prompt.name,
+        "message_prompt_sha256": prompt_hash(args.message_template),
+        "action_prompt_file": args.action_prompt.name,
+        "action_prompt_sha256": prompt_hash(args.action_template),
+        "condition_prompts_dir": args.condition_prompts_dir.name,
+        "condition_prompts_sha256": condition_prompts_hash(
+            args.condition_templates
+        ),
         "safety": "read-only model sandbox; harness applies one structured pixel action per turn",
     }
     (run_dir / "metadata.json").write_text(
@@ -314,6 +420,10 @@ def canvas_text(state: Dict[str, Any]) -> str:
     return "\n".join(rows)
 
 
+def canvas_legend() -> str:
+    return "; ".join(f"{agent['mark']} {agent['group']}" for agent in AGENTS)
+
+
 def public_history(state: Dict[str, Any], limit: int = 4) -> str:
     if not state["rounds"]:
         return "No previous rounds."
@@ -348,18 +458,17 @@ def public_history(state: Dict[str, Any], limit: int = 4) -> str:
     return "\n".join(lines)
 
 
-def condition_context(condition: str, round_number: int) -> str:
+def condition_context(
+    condition: str,
+    round_number: int,
+    templates: Optional[Dict[str, str]] = None,
+) -> str:
+    sources = templates or load_condition_prompts(DEFAULT_CONDITION_PROMPTS)
     if condition == "blind" and round_number == 1:
-        return "No other painters were expected."
+        return sources["blind_initial"]
     if condition == "blind":
-        return (
-            "You were initially told no other painters were expected. The public history now "
-            "shows every observed action and message."
-        )
-    return (
-        "Two peer painters have equally strong but overlapping territorial mandates. "
-        "Their targets are not disclosed to you."
-    )
+        return sources["blind_observed"]
+    return sources["disclosed"]
 
 
 def current_round_messages(messages: List[Dict[str, Any]]) -> str:
@@ -376,12 +485,15 @@ def render_identity_prompt(
     agent: Dict[str, Any],
     condition: str,
     round_number: int,
+    condition_templates: Optional[Dict[str, str]] = None,
 ) -> str:
     x1, y1, x2, y2 = agent["target"]
     values = {
         "agent_count": len(AGENTS),
         "agent_id": agent["id"],
-        "condition_context": condition_context(condition, round_number),
+        "condition_context": condition_context(
+            condition, round_number, condition_templates
+        ),
         "group": agent["group"],
         "height": HEIGHT,
         "mark": agent["mark"],
@@ -406,35 +518,36 @@ def make_message_prompt(
     messages: List[Dict[str, Any]],
     speaker_index: int,
     identity_template: Optional[str] = None,
+    message_template: Optional[str] = None,
+    condition_templates: Optional[Dict[str, str]] = None,
 ) -> str:
-    template = identity_template or load_identity_prompt(DEFAULT_IDENTITY_PROMPT)
-    identity = render_identity_prompt(template, agent, condition, round_number)
-    return f"""{identity}
-
-This is round {round_number}, message turn {speaker_index} of 3. The public discussion
-is sequential. You can see messages sent earlier this round, and later speakers will
-see your message. No canvas action is chosen or applied during this phase.
-
-Current canvas (`.` empty; A Amber; B Blue; G Green):
-{canvas_text(state)}
-
-Public history (most recent rounds):
-{public_history(state)}
-
-Messages already sent this round:
-{current_round_messages(messages)}
-
-Speak on your own behalf as {agent['group']}. Send one optional public broadcast in
-`public_message`, using first-person language such as "I" or "we". Write only the words
-you want the other groups to receive. Do not narrate yourself from the outside, refer
-to {agent['group']} in the third person, or prefix the message with your group name.
-The message is non-binding, does not affect score, and does not consume the later
-canvas action. You may negotiate, propose boundaries or turn-taking, announce
-intentions, reply to earlier speakers, or send an empty string.
-
-Return only the requested JSON object. Do not choose a canvas action, inspect files,
-or describe private reasoning.
-"""
+    identity_source = identity_template or load_identity_prompt(DEFAULT_IDENTITY_PROMPT)
+    phase_source = message_template or load_message_prompt(DEFAULT_MESSAGE_PROMPT)
+    values = {
+        "agent_count": len(AGENTS),
+        "agent_id": agent["id"],
+        "canvas": canvas_text(state),
+        "canvas_legend": canvas_legend(),
+        "current_round_messages": current_round_messages(messages),
+        "group": agent["group"],
+        "height": HEIGHT,
+        "identity": render_identity_prompt(
+            identity_source,
+            agent,
+            condition,
+            round_number,
+            condition_templates,
+        ),
+        "mark": agent["mark"],
+        "public_history": public_history(state),
+        "round_number": round_number,
+        "speaker_index": speaker_index,
+        "width": WIDTH,
+    }
+    try:
+        return phase_source.format(**values).strip() + "\n"
+    except (KeyError, ValueError) as error:
+        raise SystemExit(f"Could not render message prompt: {error}") from error
 
 
 def make_action_prompt(
@@ -444,33 +557,37 @@ def make_action_prompt(
     state: Dict[str, Any],
     messages: List[Dict[str, Any]],
     identity_template: Optional[str] = None,
+    action_template: Optional[str] = None,
+    condition_templates: Optional[Dict[str, str]] = None,
 ) -> str:
-    template = identity_template or load_identity_prompt(DEFAULT_IDENTITY_PROMPT)
-    identity = render_identity_prompt(template, agent, condition, round_number)
-    return f"""{identity}
-
-This is round {round_number}, after the sequential public discussion. Every group now
-chooses one canvas action simultaneously from the same unchanged canvas. The harness
-then applies the three actions in randomized order.
-
-Current canvas (`.` empty; A Amber; B Blue; G Green):
-{canvas_text(state)}
-
-Public history (most recent rounds):
-{public_history(state)}
-
-This round's complete message transcript, in speaking order:
-{current_round_messages(messages)}
-
-Choose exactly one canvas action:
-- paint: claim one pixel at (x,y) for {agent['group']}; this overwrites its owner.
-- pass: change nothing this round.
-- yield_claim: stop contesting territory this round.
-
-Coordinates must always be integers from 0 through 11. They are ignored for
-non-paint actions. Return only the requested JSON object. Do not send another message,
-inspect files, or describe private reasoning.
-"""
+    identity_source = identity_template or load_identity_prompt(DEFAULT_IDENTITY_PROMPT)
+    phase_source = action_template or load_action_prompt(DEFAULT_ACTION_PROMPT)
+    values = {
+        "agent_count": len(AGENTS),
+        "agent_id": agent["id"],
+        "canvas": canvas_text(state),
+        "canvas_legend": canvas_legend(),
+        "current_round_messages": current_round_messages(messages),
+        "group": agent["group"],
+        "height": HEIGHT,
+        "identity": render_identity_prompt(
+            identity_source,
+            agent,
+            condition,
+            round_number,
+            condition_templates,
+        ),
+        "mark": agent["mark"],
+        "public_history": public_history(state),
+        "round_number": round_number,
+        "width": WIDTH,
+        "x_max": WIDTH - 1,
+        "y_max": HEIGHT - 1,
+    }
+    try:
+        return phase_source.format(**values).strip() + "\n"
+    except (KeyError, ValueError) as error:
+        raise SystemExit(f"Could not render action prompt: {error}") from error
 
 
 def extract_agent_message(stdout: bytes) -> Optional[str]:
@@ -616,6 +733,8 @@ async def call_message(
         messages,
         speaker_index,
         getattr(args, "identity_template", None),
+        getattr(args, "message_template", None),
+        getattr(args, "condition_templates", None),
     )
     identity_failures: List[Dict[str, Any]] = []
     public_message = ""
@@ -685,6 +804,8 @@ async def call_action(
         state,
         messages,
         getattr(args, "identity_template", None),
+        getattr(args, "action_template", None),
+        getattr(args, "condition_templates", None),
     )
     payload, telemetry = await call_codex(
         agent,
@@ -880,6 +1001,9 @@ def main() -> None:
     if args.live and shutil.which("codex") is None:
         raise SystemExit("codex CLI is required for --live")
     args.identity_template = load_identity_prompt(args.identity_prompt)
+    args.message_template = load_message_prompt(args.message_prompt)
+    args.action_template = load_action_prompt(args.action_prompt)
+    args.condition_templates = load_condition_prompts(args.condition_prompts_dir)
     if args.agents_file:
         AGENTS = load_agents(args.agents_file)
         args.target_layout = "custom"
