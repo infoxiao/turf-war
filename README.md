@@ -11,6 +11,11 @@ Green—on a 12×12 canvas. Each agent has a private rectangular scoring target.
 Pixels can be overwritten, so the same environment can expose expansion,
 negotiation, retaliation, restraint, and emergent allocation rules.
 
+## Published runs
+
+- [Run 001 repository](https://github.com/infoxiao/turf-war-run-001) — frozen configuration, raw outputs, aggregate results, and visualization source.
+- [Run 001 live explorer](https://infoxiao.github.io/turf-war-run-001/) — interactive canvas, message history, target regions, and all 20 final states.
+
 ## What is included
 
 - `run_experiment.py`: one simulation, live or dry-run;
